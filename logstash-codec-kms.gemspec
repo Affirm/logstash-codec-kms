@@ -1,7 +1,7 @@
 Gem::Specification.new do |s|
   s.name          = 'logstash-codec-kms'
   s.version       = '0.1.0'
-  s.licenses      = ['Apache License (2.0)']
+  s.licenses      = ['BSD-3-Clause']
   s.summary       = "Codec for decrypting and encrypting messages using AWS KMS in Logstash"
   s.description   = "This gem is a logstash plugin required to be installed on top of the Logstash core pipeline using $LS_HOME/bin/logstash-plugin install gemname. This gem is not a stand-alone program"
   s.authors       = ["Greg Sterin"]
