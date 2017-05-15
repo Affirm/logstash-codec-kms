@@ -29,7 +29,7 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
   # [source,ruby]
   #     stdin {
   #         codec => kms {
-  #             codec => "json"   
+  #             codec => "json"
   #         }
   #     }
   #
@@ -64,7 +64,7 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
 
   # If set, incoming messages that cannot be decrypted will try to pass the original message
   # through this plugin's codec. By default, undecryptable messages will fail immediately.
-  
+
   # This is useful to avoid issues while you are migrating to an encrypted transport.
   # For example, if you are currently sending unencrypted data, but want to start sending KMS encrypted data,
   # there will be a window during your deployment where old hosts are sending decrypted data while new hosts
@@ -96,7 +96,7 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
     elsif @aws_profile
       credentials = com.amazonaws.auth.profile::ProfileCredentialsProvider.new(@aws_profile)
     end
-    
+
     @key_provider = com.amazonaws.encryptionsdk.kms::KmsMasterKeyProvider.new(
       credentials,
       com.amazonaws.regions::RegionUtils::getRegion(@region),
