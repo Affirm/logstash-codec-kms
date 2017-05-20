@@ -3,6 +3,7 @@ require_relative '../spec_helper'
 require "logstash/codecs/kms"
 require "logstash/event"
 require "logstash/codecs/plain"
+require "logstash/errors"
 
 RSpec.describe "codecs/kms" do
   let(:config) {{
@@ -44,8 +45,14 @@ RSpec.describe "codecs/kms" do
         expect { codec.register }.to_not raise_error
     end
 
+    it "fails if key_ids is empty" do
+        expect { 
+            LogStash::Plugin.lookup("codec", "kms").new({"region"=> "us-east-1", "key_ids" => [] })
+         }.to raise_error(LogStash::ConfigurationError)
+    end
+
     it "decrypts" do
-        expect(kms).to receive(:get_crypto_client).and_return(mock_client)
+        expect(kms).to receive(:crypto_client).and_return(mock_client)
         event = nil
         kms.decode("some_data") do |decoded|
             event = decoded
@@ -53,8 +60,19 @@ RSpec.describe "codecs/kms" do
         expect(event.get("message")).to eql('decrypted')
     end
 
+    it "decrypts" do
+        expect(kms).to receive(:crypto_client).and_return(mock_client)
+        event = nil
+        kms.decode("some_data") do |decoded|
+            event = decoded
+        end
+        message = event.get('message')
+        expect(message).to eql('decrypted')
+        expect(message.encoding.name).to eql('UTF-8')
+    end
+
     it "encrypts" do
-        expect(kms).to receive(:get_crypto_client).and_return(mock_client)
+        expect(kms).to receive(:crypto_client).and_return(mock_client)
         event = LogStash::Event.new
         event.set("message", "Hello World.")
         data = kms.encode_sync(event)
@@ -63,7 +81,7 @@ RSpec.describe "codecs/kms" do
 
     it "decrypt fails with passthrough" do
         codec = LogStash::Plugin.lookup("codec", "kms").new(config.merge("fallback_if_invalid_format" => true))
-        expect(codec).to receive(:get_crypto_client).and_return(mock_client)
+        expect(codec).to receive(:crypto_client).and_return(mock_client)
         allow(mock_client).to receive(:decryptData).and_raise(
             com.amazonaws.encryptionsdk.exception::AwsCryptoException.new())
         event = nil
@@ -75,7 +93,7 @@ RSpec.describe "codecs/kms" do
 
     it "decrypt fails without passthrough" do
         exception = com.amazonaws.encryptionsdk.exception::AwsCryptoException.new()
-        expect(kms).to receive(:get_crypto_client).and_return(mock_client)
+        expect(kms).to receive(:crypto_client).and_return(mock_client)
         allow(mock_client).to receive(:decryptData).and_raise(exception)
         expect { kms.decode("some_data") }.to raise_error(exception)
     end
@@ -89,7 +107,7 @@ RSpec.describe "codecs/kms" do
     }
 
     it "decrypts" do
-        expect(kms).to receive(:get_crypto_client).and_return(mock_client)
+        expect(kms).to receive(:crypto_client).and_return(mock_client)
         expect { kms.decode("some_data")  }.to raise_error(RuntimeError)
     end
   end

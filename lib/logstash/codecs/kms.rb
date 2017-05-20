@@ -2,6 +2,7 @@
 require "logstash/codecs/base"
 require "logstash/namespace"
 require "logstash-codec-kms_jars"
+require "logstash/util/charset"
 
 # A codec to encrypt/decrypt messages using AWS KMS
 #
@@ -12,7 +13,7 @@ require "logstash-codec-kms_jars"
 #
 #  * Have an AWS account.
 #  * Setup a KMS key to use.
-#  * Create an identify that has access to decrypt using the kms key you created.
+#  * Create an identity that has access to decrypt using the kms key you created.
 #
 # See https://docs.aws.amazon.com/kms/latest/developerguide/create-keys.html
 # for details on creating keys.
@@ -24,7 +25,7 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
 
   config_name "kms"
 
-  # The codec use after the message is decrypted (if this is used with an input)
+  # The codec used after the message is decrypted (if this is used with an input)
   # or the codec to use before the message is encrypted (if this is used with an output)
   # [source,ruby]
   #     stdin {
@@ -37,7 +38,7 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
 
   # A list of KMS key ids. If more than one key is provided, the encrypted payload will
   # contain a copy of the data key encrypted with each of the keys specified here.
-  # At minimun, you should provide a single key id to use for KMS encryption.
+  # At minimum, you should provide a single key id to use for KMS encryption.
   config :key_ids, :validate => :string, :list => true, :required => true
 
   # The AWS region for KMS (ex us-east-1)
@@ -56,9 +57,10 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
   config :aws_profile, :validate => :string, :default => nil
 
   # An encryption context to use to encrypting and decrypting data.
-  # When ecrypting, the encryption context is sent as a part of the payload
-  # When decrypting, if any of the key-value pairs specified in encryption_context is
-  # missing from the payload's encryption context, then decryption will fail.
+  # When encrypting, the encryption context is sent as a part of the payload.
+  # When decrypting, if any of the key-value pairs specified in encryption_context
+  # fails to match the payload's encryption context, then decryption will fail.
+  # Nested hashes are not supported. This is just a flat map of key value pairs.
   # See: http://docs.aws.amazon.com/kms/latest/developerguide/encryption-context.html
   config :encryption_context, :validate => :hash, :default => {}
 
@@ -67,7 +69,7 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
 
   # This is useful to avoid issues while you are migrating to an encrypted transport.
   # For example, if you are currently sending unencrypted data, but want to start sending KMS encrypted data,
-  # there will be a window during your deployment where old hosts are sending decrypted data while new hosts
+  # there will be a window during your deployment where old hosts are sending plain data while new hosts
   # are sending encrypted data.
   # You can handle this case by setting fallback_if_invalid_format to true.
   #
@@ -82,6 +84,11 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
   #
   config :fallback_if_invalid_format, :validate => :boolean, :default => false
 
+  # The expected charset of the data AFTER decryption.
+  config :charset, :validate => ::Encoding.name_list, :default => "UTF-8"
+
+  attr_reader :crypto_client
+
   def register
     @crypto_client = com.amazonaws.encryptionsdk::AwsCrypto.new
 
@@ -93,8 +100,10 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
           @secret_key
         )
       )
+      @logger.debug("Using AWSStaticCredentialsProvider", plugin: self.class.name)
     elsif @aws_profile
       credentials = com.amazonaws.auth.profile::ProfileCredentialsProvider.new(@aws_profile)
+      @logger.debug("Using ProfileCredentialsProvider", plugin: self.class.name)
     end
 
     @key_provider = com.amazonaws.encryptionsdk.kms::KmsMasterKeyProvider.new(
@@ -103,38 +112,30 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
       com.amazonaws::ClientConfiguration.new,
       @key_ids
     )
+    @logger.debug("Encryption Context: " + @encryption_context.to_s, plugin: self.class.name)
   end # def register
 
   def decode(data)
     begin
-      response = get_crypto_client().decryptData(@key_provider, data.to_java_bytes)
+      response = self.crypto_client.decryptData(@key_provider, data.to_java_bytes)
       context = response.getEncryptionContext()
       @encryption_context.each do |key, value|
         if not context.containsKey(key) or context[key] != value
           raise RuntimeError.new('Encryption context does not match expected. Recieved context: ' + context.to_s)
         end
       end
-      data = String.from_java_bytes(response.getResult())
+      data = String.from_java_bytes(response.getResult(), @charset)
     rescue com.amazonaws.encryptionsdk.exception::AwsCryptoException
-      unless @fallback_if_invalid_format
-        raise
-      end
+      raise unless @fallback_if_invalid_format
     end
 
-    @codec.decode(data) do |message|
-      yield message
-    end
+    @codec.decode(data, &Proc.new)
   end # def decode
 
   # Encode a single event, this returns the raw data to be returned as a String
   def encode_sync(event)
     data = @codec.multi_encode([event])[0][1]
-    encrypted = get_crypto_client().encryptData(@key_provider, data.to_java_bytes, @encryption_context).getResult();
-    return String.from_java_bytes(encrypted).force_encoding('BINARY')
+    encrypted = self.crypto_client.encryptData(@key_provider, data.to_java_bytes, @encryption_context).getResult()
+    return String.from_java_bytes(encrypted, 'BINARY')
   end # def encode_sync
-
-  # Simple getter for the crypto_client, so that is can be mocked out in unit tests
-  def get_crypto_client()
-    return @crypto_client
-  end
 end # class LogStash::Codecs::Kms
