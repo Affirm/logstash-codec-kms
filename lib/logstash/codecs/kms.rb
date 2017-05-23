@@ -3,6 +3,7 @@ require "logstash/codecs/base"
 require "logstash/namespace"
 require "logstash-codec-kms_jars"
 require "logstash/util/charset"
+require "logstash/errors"
 
 # A codec to encrypt/decrypt messages using AWS KMS
 #
@@ -90,6 +91,12 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
   attr_reader :crypto_client
 
   def register
+    @encryption_context.each do |key, value|
+      if not value.is_a?(String)
+        raise LogStash::ConfigurationError.new("Values in encryption_context must be strings.")
+      end
+    end
+
     @crypto_client = com.amazonaws.encryptionsdk::AwsCrypto.new
 
     credentials = com.amazonaws.auth::DefaultAWSCredentialsProviderChain.new

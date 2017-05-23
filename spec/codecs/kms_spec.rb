@@ -51,6 +51,15 @@ RSpec.describe "codecs/kms" do
          }.to raise_error(LogStash::ConfigurationError)
     end
 
+    it "fails if encryption_context is nested" do
+        expect {
+            LogStash::Plugin.lookup("codec", "kms").new({
+                "region"=> "us-east-1",
+                "key_ids" => ["foo"],
+                "encryption_context" => {"foo" => {"nested" => "bad"}}})
+         }.to raise_error(LogStash::ConfigurationError)
+    end
+
     it "decrypts" do
         expect(kms).to receive(:crypto_client).and_return(mock_client)
         event = nil
