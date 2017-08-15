@@ -88,7 +88,17 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
   # The expected charset of the data AFTER decryption.
   config :charset, :validate => ::Encoding.name_list, :default => "UTF-8"
 
+  # The TTL of entries in the KMS materials cache.
+  config :max_entry_age_ms, :validate => :number, :default => 300000
+
+  # The maximum number of times a caches KMS material can be used before it is refreshed.
+  config :max_entry_uses, :validate => :number, :default => 1000
+
+  # The capacity for the KMS materials cache.
+  config :max_cache_entries, :validate => :number, :default => 1000
+
   attr_reader :crypto_client
+  attr_reader :crypto_materials_manager
 
   def register
     @encryption_context.each do |key, value|
@@ -113,18 +123,26 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
       @logger.debug("Using ProfileCredentialsProvider", plugin: self.class.name)
     end
 
-    @key_provider = com.amazonaws.encryptionsdk.kms::KmsMasterKeyProvider.new(
+    key_provider = com.amazonaws.encryptionsdk.kms::KmsMasterKeyProvider.new(
       credentials,
       com.amazonaws.regions::RegionUtils::getRegion(@region),
       com.amazonaws::ClientConfiguration.new,
       @key_ids
     )
+
+    @crypto_materials_manager = com.amazonaws.encryptionsdk.caching::CachingCryptoMaterialsManager.newBuilder()
+      .withMasterKeyProvider(key_provider)
+      .withCache(com.amazonaws.encryptionsdk.caching::LocalCryptoMaterialsCache.new(@max_cache_entries))
+      .withMaxAge(@max_entry_age_ms, java.util.concurrent.TimeUnit::MILLISECONDS)
+      .withMessageUseLimit(@max_entry_uses)
+      .build()
+
     @logger.debug("Encryption Context: " + @encryption_context.to_s, plugin: self.class.name)
   end # def register
 
   def decode(data)
     begin
-      response = self.crypto_client.decryptData(@key_provider, data.to_java_bytes)
+      response = self.crypto_client.decryptData(@crypto_materials_manager, data.to_java_bytes)
       context = response.getEncryptionContext()
       @encryption_context.each do |key, value|
         if not context.containsKey(key) or context[key] != value
@@ -142,7 +160,7 @@ class LogStash::Codecs::Kms < LogStash::Codecs::Base
   # Encode a single event, this returns the raw data to be returned as a String
   def encode_sync(event)
     data = @codec.multi_encode([event])[0][1]
-    encrypted = self.crypto_client.encryptData(@key_provider, data.to_java_bytes, @encryption_context).getResult()
+    encrypted = self.crypto_client.encryptData(@crypto_materials_manager, data.to_java_bytes, @encryption_context).getResult()
     return String.from_java_bytes(encrypted, 'BINARY')
   end # def encode_sync
 end # class LogStash::Codecs::Kms
